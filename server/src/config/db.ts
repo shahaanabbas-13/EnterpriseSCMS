@@ -1,12 +1,16 @@
-import mongoose from 'mongoose';
-import config from './index';
-import { logger } from '../utils/logger';
+import mongoose from "mongoose";
+import config from "./index";
+import { logger } from "../utils/logger";
 
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 5000;
 
 export const connectDB = async (): Promise<void> => {
   let retries = 0;
+
+  if (!config.mongo.uri) {
+    throw new Error("MONGODB_URI is missing from environment configuration");
+  }
 
   while (retries < MAX_RETRIES) {
     try {
@@ -17,12 +21,12 @@ export const connectDB = async (): Promise<void> => {
       logger.info(`MongoDB connected: ${mongoose.connection.host}`);
 
       // Connection event listeners
-      mongoose.connection.on('error', (err) => {
-        logger.error('MongoDB connection error:', err);
+      mongoose.connection.on("error", (err) => {
+        logger.error("MongoDB connection error:", err);
       });
 
-      mongoose.connection.on('disconnected', () => {
-        logger.warn('MongoDB disconnected. Attempting reconnection...');
+      mongoose.connection.on("disconnected", () => {
+        logger.warn("MongoDB disconnected. Attempting reconnection...");
       });
 
       return; // Success — exit retry loop
@@ -30,11 +34,11 @@ export const connectDB = async (): Promise<void> => {
       retries++;
       logger.error(
         `MongoDB connection attempt ${retries}/${MAX_RETRIES} failed:`,
-        error
+        error,
       );
 
       if (retries >= MAX_RETRIES) {
-        logger.error('Max MongoDB connection retries reached. Exiting.');
+        logger.error("Max MongoDB connection retries reached. Exiting.");
         process.exit(1);
       }
 
@@ -46,5 +50,5 @@ export const connectDB = async (): Promise<void> => {
 
 export const disconnectDB = async (): Promise<void> => {
   await mongoose.disconnect();
-  logger.info('MongoDB disconnected gracefully.');
+  logger.info("MongoDB disconnected gracefully.");
 };
