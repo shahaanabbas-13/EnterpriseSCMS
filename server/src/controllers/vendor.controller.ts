@@ -4,12 +4,24 @@ import { AuditService } from '../services/audit.service';
 import { ApiResponse } from '../utils/ApiResponse';
 import { AuthRequest, AuditAction, VendorStatus, PurchaseOrderStatus } from '../types';
 import { str, strOrUndefined, numOrUndefined } from '../utils/express-helpers';
+import { ApiError } from '../utils/ApiError';
+import { User } from '../models/User.model';
+import { Vendor } from '../models/Vendor.model';
 
 /**
  * Vendor controller.
  * Handles HTTP layer for vendors and purchase orders.
  */
 export class VendorController {
+  private static async getVendorAccountId(req: AuthRequest): Promise<string> {
+    const account = await User.findById(req.user!.userId).select('role vendorId isActive');
+    if (!account || !account.isActive) throw ApiError.unauthorized('Vendor account is no longer active');
+    if (account.role !== 'VENDOR') throw ApiError.forbidden('This account is no longer a vendor account');
+    if (!account.vendorId) throw ApiError.forbidden('This vendor account is not linked to a supplier. Ask an administrator to link it.');
+    if (!await Vendor.findOne({ _id: account.vendorId, status: VendorStatus.ACTIVE }).select('_id')) throw ApiError.forbidden('The linked supplier is inactive. Contact an administrator.');
+    return account.vendorId.toString();
+  }
+
   // ─── Vendor Endpoints ──────────────────────────────────────────────
 
   static async createVendor(req: AuthRequest, res: Response): Promise<void> {
@@ -120,10 +132,11 @@ export class VendorController {
   static async getPurchaseOrders(req: AuthRequest, res: Response): Promise<void> {
     const startDateStr = strOrUndefined(req.query.startDate);
     const endDateStr = strOrUndefined(req.query.endDate);
+    const vendorId = req.user!.role === 'VENDOR' ? await VendorController.getVendorAccountId(req) : undefined;
 
     const result = await VendorService.getPurchaseOrders(
       {
-        vendorId: strOrUndefined(req.query.vendorId),
+        vendorId: vendorId ?? strOrUndefined(req.query.vendorId),
         warehouseId: strOrUndefined(req.query.warehouseId),
         status: strOrUndefined(req.query.status) as PurchaseOrderStatus | undefined,
         startDate: startDateStr ? new Date(startDateStr) : undefined,
@@ -147,11 +160,25 @@ export class VendorController {
 
   static async getPurchaseOrderById(req: AuthRequest, res: Response): Promise<void> {
     const po = await VendorService.getPurchaseOrderById(str(req.params.id));
+    if (req.user!.role === 'VENDOR') {
+      const vendorId = await VendorController.getVendorAccountId(req);
+      const vendorRef = po.vendorId as unknown as { _id?: unknown };
+      const ownerId = String(vendorRef?._id ?? po.vendorId);
+      if (ownerId !== vendorId) throw ApiError.notFound('Purchase order not found');
+    }
     ApiResponse.success(res, po, 'Purchase order retrieved');
   }
 
   static async updatePurchaseOrderStatus(req: AuthRequest, res: Response): Promise<void> {
-    const po = await VendorService.updatePurchaseOrderStatus(
+    if (req.user!.role === 'VENDOR') {
+      if (req.body.status !== PurchaseOrderStatus.ACKNOWLEDGED) throw ApiError.forbidden('Vendors can only acknowledge purchase orders sent to them');
+      const vendorId = await VendorController.getVendorAccountId(req);
+      const existingPO = await VendorService.getPurchaseOrderById(str(req.params.id));
+      const vendorRef = existingPO.vendorId as unknown as { _id?: unknown };
+      const ownerId = String(vendorRef?._id ?? existingPO.vendorId);
+      if (ownerId !== vendorId) throw ApiError.notFound('Purchase order not found');
+    }
+    const { po, previousStatus } = await VendorService.updatePurchaseOrderStatus(
       str(req.params.id),
       req.body.status,
       req.user!.userId
@@ -162,11 +189,29 @@ export class VendorController {
       action: AuditAction.STATUS_CHANGE,
       entity: 'PurchaseOrder',
       entityId: po._id.toString(),
+      previousValue: { status: previousStatus },
       newValue: { status: po.status, poNumber: po.poNumber },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
     });
 
     ApiResponse.success(res, po, `Purchase order status updated to ${po.status}`);
+  }
+
+  static async receivePurchaseOrder(req: AuthRequest, res: Response): Promise<void> {
+    const { po, previousStatus } = await VendorService.receivePurchaseOrder(
+      str(req.params.id), req.user!.userId, req.body
+    );
+    await AuditService.log({
+      userId: req.user!.userId,
+      action: AuditAction.STATUS_CHANGE,
+      entity: 'PurchaseOrder',
+      entityId: po._id.toString(),
+      previousValue: { status: previousStatus, receivedQuantities: po.items.map(item => ({ sku: item.sku, quantity: item.receivedQuantity - (req.body.items.find((entry: { productId: string }) => entry.productId === item.productId.toString())?.quantity || 0) })) },
+      newValue: { status: po.status, poNumber: po.poNumber, receivedItems: req.body.items, note: req.body.note },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    ApiResponse.success(res, po, `Receipt recorded; purchase order is ${po.status}`);
   }
 }

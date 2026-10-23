@@ -63,6 +63,12 @@ router.get(
 
 // ─── Analytics Routes ──────────────────────────────────────────────────────────
 router.get(
+  '/analytics/replenishment',
+  requireRole(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.OPERATIONS_MANAGER),
+  InventoryController.getReplenishmentPlan
+);
+
+router.get(
   '/analytics/stock-value',
   requireRole(UserRole.ADMIN, UserRole.OPERATIONS_MANAGER),
   InventoryController.getStockValueByCategory

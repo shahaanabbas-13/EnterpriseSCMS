@@ -14,6 +14,7 @@ import {
 import { appEvents } from '../events';
 import { PAGINATION } from '../utils/constants';
 import { logger } from '../utils/logger';
+import { ShipmentCreationDetails, createShipmentForOrder } from './shipmentFactory';
 
 /**
  * Order service.
@@ -200,63 +201,104 @@ export class OrderService {
     orderId: string,
     newStatus: OrderStatus,
     actorId: string,
-    note?: string
-  ): Promise<IOrderDocument> {
+    note?: string,
+    shipmentDetails?: ShipmentCreationDetails
+  ): Promise<{ order: IOrderDocument; previousStatus: OrderStatus }> {
     const session = await mongoose.startSession();
     session.startTransaction();
+    let transition: {
+      order: IOrderDocument;
+      previousStatus: OrderStatus;
+      shipment?: import('../models/Shipment.model').IShipmentDocument;
+    };
 
     try {
-      const order = await Order.findById(orderId).session(session);
-      if (!order) throw ApiError.notFound('Order not found');
-
-      const previousStatus = order.status;
-
-      // 1. Validate transition
-      OrderStateMachine.validateTransition(previousStatus, newStatus);
-
-      // 2. Pre-transition side effects
-      await this.preTransitionEffects(order, newStatus, actorId, session);
-
-      // 3. Update order status
-      order.status = newStatus;
-      order.statusHistory.push({
-        status: newStatus,
-        timestamp: new Date(),
-        changedBy: new mongoose.Types.ObjectId(actorId),
-        note,
-      });
-
-      // Set timestamp fields
-      const tsField = OrderStateMachine.getTimestampField(newStatus);
-      if (tsField) {
-        (order as any)[tsField] = new Date();
-      }
-
-      await order.save({ session });
-
-      // 4. Post-transition side effects
-      await this.postTransitionEffects(order, previousStatus, newStatus, actorId, session);
-
-      await session.commitTransaction();
-
-      // 5. Emit event (outside transaction)
-      appEvents.emitEvent(AppEvents.ORDER_STATUS_CHANGED, {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        previousStatus,
+      transition = await this.transitionOrderInSession(
+        orderId,
         newStatus,
         actorId,
-        timestamp: new Date(),
-      });
-
-      logger.info(`Order ${order.orderNumber}: ${previousStatus} → ${newStatus}`);
-      return order;
+        note,
+        session,
+        shipmentDetails
+      );
+      await session.commitTransaction();
     } catch (error) {
       await session.abortTransaction();
       throw error;
     } finally {
       session.endSession();
     }
+
+    this.publishOrderTransition(transition, newStatus, actorId);
+    return { order: transition.order, previousStatus: transition.previousStatus };
+  }
+
+  /**
+   * Apply an order transition inside a caller-owned MongoDB transaction.
+   * Shipment status updates use this so both lifecycle records commit together.
+   */
+  static async transitionOrderInSession(
+    orderId: string,
+    newStatus: OrderStatus,
+    actorId: string,
+    note: string | undefined,
+    session: mongoose.ClientSession,
+    shipmentDetails?: ShipmentCreationDetails
+  ): Promise<{ order: IOrderDocument; previousStatus: OrderStatus; shipment?: import('../models/Shipment.model').IShipmentDocument }> {
+    const order = await Order.findById(orderId).session(session);
+    if (!order) throw ApiError.notFound('Order not found');
+
+    const previousStatus = order.status;
+    OrderStateMachine.validateTransition(previousStatus, newStatus);
+    await this.preTransitionEffects(order, newStatus, actorId, session);
+
+    order.status = newStatus;
+    order.statusHistory.push({
+      status: newStatus,
+      timestamp: new Date(),
+      changedBy: new mongoose.Types.ObjectId(actorId),
+      note,
+    });
+
+    const tsField = OrderStateMachine.getTimestampField(newStatus);
+    if (tsField) {
+      (order as any)[tsField] = new Date();
+    }
+
+    await order.save({ session });
+    const shipment = await this.postTransitionEffects(
+      order, previousStatus, newStatus, actorId, session, shipmentDetails
+    );
+
+    return { order, previousStatus, shipment };
+  }
+
+  /** Publish order transition effects after its transaction commits. */
+  static publishOrderTransition(
+    transition: { order: IOrderDocument; previousStatus: OrderStatus; shipment?: import('../models/Shipment.model').IShipmentDocument },
+    newStatus: OrderStatus,
+    actorId: string
+  ): void {
+    const { order, previousStatus } = transition;
+    appEvents.emitEvent(AppEvents.ORDER_STATUS_CHANGED, {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      previousStatus,
+      newStatus,
+      actorId,
+      timestamp: new Date(),
+    });
+
+    if (transition.shipment) {
+      appEvents.emitEvent(AppEvents.SHIPMENT_CREATED, {
+        shipmentId: transition.shipment._id,
+        trackingId: transition.shipment.trackingId,
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+      });
+    }
+
+    logger.info(`Order ${order.orderNumber}: ${previousStatus} → ${newStatus}`);
   }
 
   /**
@@ -329,10 +371,16 @@ export class OrderService {
     _previousStatus: OrderStatus,
     newStatus: OrderStatus,
     actorId: string,
-    _session: mongoose.ClientSession
-  ): Promise<void> {
+    session: mongoose.ClientSession,
+    shipmentDetails?: ShipmentCreationDetails
+  ): Promise<import('../models/Shipment.model').IShipmentDocument | undefined> {
     // SHIPPED: Create stock OUT movements for each item
     if (newStatus === OrderStatus.SHIPPED) {
+      if (!shipmentDetails) {
+        throw ApiError.badRequest('Carrier and estimated delivery details are required to ship an order');
+      }
+      // Create inside this transaction so a shipment failure cannot leave the order marked shipped.
+      const shipment = await createShipmentForOrder(order, shipmentDetails, actorId, session);
       for (const item of order.items) {
         await InventoryService.recordStockMovement({
           productId: item.productId.toString(),
@@ -345,14 +393,7 @@ export class OrderService {
         });
       }
 
-      // Emit shipment creation event (Phase 5 will listen)
-      appEvents.emitEvent(AppEvents.SHIPMENT_CREATED, {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        warehouseId: order.warehouseId,
-        customer: order.customer,
-        items: order.items,
-      });
+      return shipment;
     }
 
     // RETURNED: Create stock IN movements to restore inventory
@@ -369,5 +410,7 @@ export class OrderService {
         });
       }
     }
+
+    return undefined;
   }
 }

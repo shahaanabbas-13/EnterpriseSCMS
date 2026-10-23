@@ -125,8 +125,7 @@ const shipmentSchema = new Schema<IShipmentDocument>(
   }
 );
 
-shipmentSchema.index({ trackingId: 1 });
-shipmentSchema.index({ orderId: 1 });
+shipmentSchema.index({ orderId: 1 }, { unique: true });
 shipmentSchema.index({ status: 1, createdAt: -1 });
 shipmentSchema.index({ 'carrier.code': 1 });
 shipmentSchema.index({ estimatedDelivery: 1 });

@@ -2,8 +2,9 @@ import mongoose from 'mongoose';
 import { Product, IProductDocument } from '../models/Product.model';
 import { StockMovement, IStockMovementDocument } from '../models/StockMovement.model';
 import { Warehouse } from '../models/Warehouse.model';
+import { Vendor } from '../models/Vendor.model';
 import { ApiError } from '../utils/ApiError';
-import { StockMovementType, PaginationQuery, PaginatedResult, AppEvents } from '../types';
+import { StockMovementType, PaginationQuery, PaginatedResult, AppEvents, VendorStatus } from '../types';
 import { appEvents } from '../events';
 import { PAGINATION } from '../utils/constants';
 import { logger } from '../utils/logger';
@@ -129,6 +130,11 @@ export class InventoryService {
       tags: string[];
     }>
   ): Promise<IProductDocument> {
+    if (updates.vendorId) {
+      const vendor = await Vendor.findById(updates.vendorId).select('status');
+      if (!vendor) throw ApiError.notFound('Vendor not found');
+      if (vendor.status !== VendorStatus.ACTIVE) throw ApiError.badRequest('Select an active vendor for this product');
+    }
     const product = await Product.findByIdAndUpdate(
       productId,
       { $set: updates },
@@ -356,6 +362,72 @@ export class InventoryService {
   }
 
   /**
+   * Build a transparent, 90-day moving-average replenishment baseline.
+   * This intentionally avoids calling the estimate an ML prediction: the
+   * calculation is explainable and gives us a baseline for later evaluation.
+   */
+  static async getReplenishmentPlan(): Promise<Array<Record<string, unknown>>> {
+    const windowDays = 90;
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+    const [products, demandRows] = await Promise.all([
+      Product.find({ isActive: true })
+        .populate('warehouseId', 'name code')
+        .populate('vendorId', 'name code leadTimeDays')
+        .sort({ currentStock: 1, name: 1 })
+        .lean(),
+      StockMovement.aggregate([
+        { $match: { type: StockMovementType.OUT, timestamp: { $gte: since } } },
+        { $group: { _id: '$productId', demandUnits: { $sum: { $abs: '$quantity' } } } },
+      ]),
+    ]);
+    const demandByProduct = new Map<string, number>(
+      demandRows.map(row => [String(row._id), Number(row.demandUnits) || 0])
+    );
+
+    const plan = products.map(product => {
+      const demandUnits90d = demandByProduct.get(String(product._id)) || 0;
+      const averageDailyDemand = demandUnits90d / windowDays;
+      const vendor = product.vendorId as unknown as { _id: unknown; name: string; code: string; leadTimeDays?: number } | null;
+      const leadTimeDays = Math.max(0, Number(vendor?.leadTimeDays) || 0);
+      const projectedDaysRemaining = averageDailyDemand > 0
+        ? Math.floor(product.currentStock / averageDailyDemand)
+        : null;
+      const targetStock = Math.max(
+        product.reorderPoint,
+        Math.ceil(averageDailyDemand * (leadTimeDays + 30))
+      );
+      const recommendedOrderQty = Math.max(0, targetStock - product.currentStock);
+      const risk = product.currentStock <= 0
+        ? 'OUT_OF_STOCK'
+        : projectedDaysRemaining !== null && projectedDaysRemaining <= leadTimeDays
+          ? 'CRITICAL'
+          : product.currentStock <= product.reorderPoint || (projectedDaysRemaining !== null && projectedDaysRemaining <= leadTimeDays + 14)
+            ? 'REORDER'
+            : 'HEALTHY';
+
+      return {
+        _id: product._id,
+        sku: product.sku,
+        name: product.name,
+        category: product.category,
+        unit: product.unit,
+        currentStock: product.currentStock,
+        reorderPoint: product.reorderPoint,
+        demandUnits90d,
+        averageDailyDemand: Math.round(averageDailyDemand * 100) / 100,
+        projectedDaysRemaining,
+        leadTimeDays,
+        recommendedOrderQty,
+        risk,
+        warehouse: product.warehouseId,
+        vendor: vendor ? { _id: vendor._id, name: vendor.name, code: vendor.code } : null,
+      };
+    });
+    const priority: Record<string, number> = { OUT_OF_STOCK: 0, CRITICAL: 1, REORDER: 2, HEALTHY: 3 };
+    return plan.sort((a, b) => priority[String(a.risk)] - priority[String(b.risk)] || Number(a.projectedDaysRemaining ?? Infinity) - Number(b.projectedDaysRemaining ?? Infinity));
+  }
+
+  /**
    * Get inventory summary for a specific warehouse.
    * Uses $facet for parallel aggregation pipelines.
    */
@@ -421,7 +493,7 @@ export class InventoryService {
 
   // ─── Private Helpers ──────────────────────────────────────
 
-  private static async checkLowStock(product: IProductDocument): Promise<void> {
+  static async checkLowStock(product: IProductDocument): Promise<void> {
     if (product.currentStock <= product.reorderPoint) {
       appEvents.emitEvent(AppEvents.LOW_STOCK_DETECTED, {
         productId: product._id,

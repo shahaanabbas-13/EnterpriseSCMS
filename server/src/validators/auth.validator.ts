@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { UserRole } from '../types';
 
 /**
  * Zod validation schemas for auth endpoints.
@@ -29,10 +28,6 @@ export const registerSchema = {
       .min(2, 'Name must be at least 2 characters')
       .max(100, 'Name cannot exceed 100 characters')
       .trim(),
-    role: z
-      .nativeEnum(UserRole)
-      .optional()
-      .default(UserRole.VENDOR),
   }),
 };
 

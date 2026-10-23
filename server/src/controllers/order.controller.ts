@@ -71,11 +71,17 @@ export class OrderController {
    * PATCH /api/orders/:id/status
    */
   static async updateOrderStatus(req: AuthRequest, res: Response): Promise<void> {
-    const order = await OrderService.transitionOrder(
+    const { order, previousStatus } = await OrderService.transitionOrder(
       str(req.params.id),
       req.body.status,
       req.user!.userId,
-      req.body.note
+      req.body.note,
+      req.body.shipment
+        ? {
+            ...req.body.shipment,
+            estimatedDelivery: new Date(req.body.shipment.estimatedDelivery),
+          }
+        : undefined
     );
 
     await AuditService.log({
@@ -83,6 +89,7 @@ export class OrderController {
       action: AuditAction.STATUS_CHANGE,
       entity: 'Order',
       entityId: order._id.toString(),
+      previousValue: { status: previousStatus },
       newValue: { status: order.status, orderNumber: order.orderNumber },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],

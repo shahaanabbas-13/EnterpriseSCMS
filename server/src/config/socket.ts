@@ -8,7 +8,9 @@ let io: SocketServer | null = null;
 export const initializeSocket = (httpServer: HttpServer): SocketServer => {
   io = new SocketServer(httpServer, {
     cors: {
-      origin: config.cors.origin,
+      origin: config.env === 'development'
+        ? [...new Set([config.cors.origin, 'http://localhost:5173', 'http://127.0.0.1:5173'])]
+        : config.cors.origin,
       methods: ['GET', 'POST'],
       credentials: true,
     },

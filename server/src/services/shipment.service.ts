@@ -1,14 +1,15 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
 import { Shipment, IShipmentDocument, ICheckpoint } from '../models/Shipment.model';
-import { Order } from '../models/Order.model';
+import { IOrderDocument, Order } from '../models/Order.model';
 import { Warehouse } from '../models/Warehouse.model';
 import { ApiError } from '../utils/ApiError';
-import { ShipmentStatus, PaginationQuery, PaginatedResult, AppEvents, SocketEvents } from '../types';
+import { OrderStatus, ShipmentStatus, PaginationQuery, PaginatedResult, AppEvents, SocketEvents } from '../types';
 import { appEvents } from '../events';
 import { getIO } from '../config/socket';
 import { PAGINATION } from '../utils/constants';
 import { logger } from '../utils/logger';
+import { OrderService } from './order.service';
 
 /**
  * Shipment service.
@@ -151,58 +152,99 @@ export class ShipmentService {
     shipmentId: string,
     newStatus: ShipmentStatus,
     location: string,
+    actorId: string,
     note?: string
-  ): Promise<IShipmentDocument> {
-    const shipment = await Shipment.findById(shipmentId);
-    if (!shipment) throw ApiError.notFound('Shipment not found');
+  ): Promise<{
+    shipment: IShipmentDocument;
+    previousStatus: ShipmentStatus;
+    orderTransition?: { order: IOrderDocument; previousStatus: OrderStatus };
+  }> {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let shipment: IShipmentDocument;
+    let previousStatus: ShipmentStatus;
+    let orderTransition: { order: IOrderDocument; previousStatus: OrderStatus } | undefined;
+    const synchronizedOrderStatus =
+      newStatus === ShipmentStatus.IN_TRANSIT
+        ? OrderStatus.IN_TRANSIT
+        : newStatus === ShipmentStatus.DELIVERED
+          ? OrderStatus.DELIVERED
+          : undefined;
 
-    // Validate status progression
-    const validTransitions: Record<string, ShipmentStatus[]> = {
-      [ShipmentStatus.CREATED]: [ShipmentStatus.PICKED_UP],
-      [ShipmentStatus.PICKED_UP]: [ShipmentStatus.IN_TRANSIT],
-      [ShipmentStatus.IN_TRANSIT]: [
-        ShipmentStatus.OUT_FOR_DELIVERY,
-        ShipmentStatus.DELAYED,
-      ],
-      [ShipmentStatus.DELAYED]: [
-        ShipmentStatus.IN_TRANSIT,
-        ShipmentStatus.OUT_FOR_DELIVERY,
-        ShipmentStatus.FAILED,
-      ],
-      [ShipmentStatus.OUT_FOR_DELIVERY]: [
-        ShipmentStatus.DELIVERED,
-        ShipmentStatus.FAILED,
-      ],
-      [ShipmentStatus.DELIVERED]: [],
-      [ShipmentStatus.FAILED]: [],
-    };
+    try {
+      const currentShipment = await Shipment.findById(shipmentId).session(session);
+      if (!currentShipment) throw ApiError.notFound('Shipment not found');
 
-    const allowed = validTransitions[shipment.status] || [];
-    if (!allowed.includes(newStatus)) {
-      throw ApiError.badRequest(
-        `Cannot transition shipment from ${shipment.status} to ${newStatus}. Allowed: ${allowed.join(', ') || 'none'}`
-      );
+      const validTransitions: Record<string, ShipmentStatus[]> = {
+        [ShipmentStatus.CREATED]: [ShipmentStatus.PICKED_UP],
+        [ShipmentStatus.PICKED_UP]: [ShipmentStatus.IN_TRANSIT],
+        [ShipmentStatus.IN_TRANSIT]: [
+          ShipmentStatus.OUT_FOR_DELIVERY,
+          ShipmentStatus.DELAYED,
+        ],
+        [ShipmentStatus.DELAYED]: [
+          ShipmentStatus.IN_TRANSIT,
+          ShipmentStatus.OUT_FOR_DELIVERY,
+          ShipmentStatus.FAILED,
+        ],
+        [ShipmentStatus.OUT_FOR_DELIVERY]: [
+          ShipmentStatus.DELIVERED,
+          ShipmentStatus.FAILED,
+        ],
+        [ShipmentStatus.DELIVERED]: [],
+        [ShipmentStatus.FAILED]: [],
+      };
+
+      const allowed = validTransitions[currentShipment.status] || [];
+      if (!allowed.includes(newStatus)) {
+        throw ApiError.badRequest(
+          `Cannot transition shipment from ${currentShipment.status} to ${newStatus}. Allowed: ${allowed.join(', ') || 'none'}`
+        );
+      }
+
+      // Keep the order lifecycle aligned with shipment milestones in the same transaction.
+      if (synchronizedOrderStatus) {
+        const order = await Order.findById(currentShipment.orderId).session(session);
+        if (!order) throw ApiError.notFound('Shipment order not found');
+
+        if (order.status !== synchronizedOrderStatus) {
+          orderTransition = await OrderService.transitionOrderInSession(
+            order._id.toString(),
+            synchronizedOrderStatus,
+            actorId,
+            `Synchronized from shipment ${currentShipment.trackingId}: ${newStatus} at ${location}`,
+            session
+          );
+        }
+      }
+
+      previousStatus = currentShipment.status;
+      currentShipment.status = newStatus;
+      currentShipment.checkpoints.push({
+        location,
+        timestamp: new Date(),
+        status: newStatus,
+        note,
+      });
+
+      if (newStatus === ShipmentStatus.DELIVERED) {
+        currentShipment.actualDelivery = new Date();
+      }
+
+      await currentShipment.save({ session });
+      await session.commitTransaction();
+      shipment = currentShipment;
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
     }
 
-    const previousStatus = shipment.status;
-    shipment.status = newStatus;
-
-    // Add checkpoint
-    shipment.checkpoints.push({
-      location,
-      timestamp: new Date(),
-      status: newStatus,
-      note,
-    });
-
-    // Set actual delivery date
-    if (newStatus === ShipmentStatus.DELIVERED) {
-      shipment.actualDelivery = new Date();
+    if (orderTransition && synchronizedOrderStatus) {
+      OrderService.publishOrderTransition(orderTransition, synchronizedOrderStatus, actorId);
     }
 
-    await shipment.save();
-
-    // Broadcast via Socket.io
     try {
       const io = getIO();
       io.emit(SocketEvents.SHIPMENT_UPDATE, {
@@ -228,7 +270,6 @@ export class ShipmentService {
       logger.debug('Socket.io not available for shipment update broadcast');
     }
 
-    // Emit app events
     appEvents.emitEvent(AppEvents.SHIPMENT_CHECKPOINT_ADDED, {
       shipmentId: shipment._id,
       trackingId: shipment.trackingId,
@@ -248,7 +289,7 @@ export class ShipmentService {
     logger.info(
       `Shipment ${shipment.trackingId}: ${previousStatus} → ${newStatus} at ${location}`
     );
-    return shipment;
+    return { shipment, previousStatus, orderTransition };
   }
 
   /**

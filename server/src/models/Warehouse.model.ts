@@ -66,7 +66,6 @@ const warehouseSchema = new Schema<IWarehouseDocument>(
   }
 );
 
-warehouseSchema.index({ code: 1 });
 warehouseSchema.index({ managerId: 1 });
 warehouseSchema.index({ isActive: 1 });
 

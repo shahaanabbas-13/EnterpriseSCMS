@@ -24,6 +24,7 @@ export interface JwtPayload {
   userId: string;
   email: string;
   role: UserRole;
+  vendorId?: string;
 }
 
 export interface AuthRequest extends Request {
@@ -65,6 +66,7 @@ export enum AuditAction {
   UPDATE = 'UPDATE',
   DELETE = 'DELETE',
   STATUS_CHANGE = 'STATUS_CHANGE',
+  STOCK_UPDATED = 'STOCK_UPDATED',
   LOGIN = 'LOGIN',
   LOGOUT = 'LOGOUT',
 }
@@ -109,6 +111,7 @@ export enum PurchaseOrderStatus {
   DRAFT = 'DRAFT',
   SENT = 'SENT',
   ACKNOWLEDGED = 'ACKNOWLEDGED',
+  PARTIALLY_RECEIVED = 'PARTIALLY_RECEIVED',
   DELIVERED = 'DELIVERED',
   CLOSED = 'CLOSED',
 }

@@ -25,7 +25,6 @@ export class AuthService {
     email: string;
     password: string;
     name: string;
-    role?: UserRole;
   }): Promise<{
     user: IUserDocument;
     accessToken: string;
@@ -42,7 +41,7 @@ export class AuthService {
       email: data.email,
       password: data.password,
       name: data.name,
-      role: data.role || UserRole.VENDOR,
+      role: UserRole.VENDOR,
     });
 
     // Generate token pair
@@ -193,6 +192,7 @@ export class AuthService {
       userId: user._id.toString(),
       email: user.email,
       role: user.role,
+      ...(user.vendorId ? { vendorId: user.vendorId.toString() } : {}),
     };
 
     // Access token (short-lived JWT)

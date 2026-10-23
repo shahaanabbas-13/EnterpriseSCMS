@@ -38,6 +38,25 @@ export const updateOrderStatusSchema = {
       required_error: 'Status is required',
     }),
     note: z.string().max(500).trim().optional(),
+    shipment: z.object({
+      carrier: z.object({
+        name: z.string().min(1).trim(),
+        code: z.string().min(1).trim(),
+        contactPhone: z.string().trim().optional(),
+      }),
+      estimatedDelivery: z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
+        message: 'Invalid estimated delivery date',
+      }),
+      shippingCost: z.number().min(0).optional(),
+    }).optional(),
+  }).superRefine((body, context) => {
+    if (body.status === OrderStatus.SHIPPED && !body.shipment) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['shipment'],
+        message: 'Carrier and estimated delivery details are required when shipping an order',
+      });
+    }
   }),
 };
 

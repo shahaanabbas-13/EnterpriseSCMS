@@ -181,21 +181,42 @@ export class AnalyticsService {
       },
     ]);
 
-    // Calculate turnover rate from stock movements (last 30 days)
+    // Estimate 30-day inventory turnover as cost of goods shipped divided by
+    // average inventory value. Movement quantities are signed, so their net
+    // value change lets us estimate the inventory value at the start of the period.
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const [movementStats] = await StockMovement.aggregate([
       {
         $match: {
-          type: 'OUT',
           timestamp: { $gte: thirtyDaysAgo },
         },
       },
       {
+        $lookup: {
+          from: 'products',
+          localField: 'productId',
+          foreignField: '_id',
+          as: 'product',
+        },
+      },
+      { $unwind: '$product' },
+      {
         $group: {
           _id: null,
-          totalOutQuantity: { $sum: { $abs: '$quantity' } },
+          costOfGoodsShipped: {
+            $sum: {
+              $cond: [
+                { $eq: ['$type', 'OUT'] },
+                { $multiply: [{ $abs: '$quantity' }, '$product.costPrice'] },
+                0,
+              ],
+            },
+          },
+          netInventoryValueChange: {
+            $sum: { $multiply: ['$quantity', '$product.costPrice'] },
+          },
         },
       },
     ]);
@@ -208,12 +229,23 @@ export class AnalyticsService {
       outOfStockCount: 0,
     };
 
-    const totalOut = movementStats?.totalOutQuantity || 0;
-    const avgInventory = overview.totalProducts > 0 ? overview.totalStockValue / overview.totalProducts : 1;
-    const turnoverRate = avgInventory > 0 ? Math.round((totalOut / avgInventory) * 100) / 100 : 0;
+    const endingInventoryValue = overview.totalStockValue;
+    const beginningInventoryValue = Math.max(
+      0,
+      endingInventoryValue - (movementStats?.netInventoryValueChange || 0)
+    );
+    const averageInventoryValue = (beginningInventoryValue + endingInventoryValue) / 2;
+    const costOfGoodsShipped = movementStats?.costOfGoodsShipped || 0;
+    const turnoverRate = averageInventoryValue > 0
+      ? Math.round((costOfGoodsShipped / averageInventoryValue) * 100) / 100
+      : 0;
 
     return {
-      ...overview,
+      totalProducts: overview.totalProducts,
+      totalStockValue: Math.round(overview.totalStockValue * 100) / 100,
+      avgStockValue: Math.round(overview.avgStockValue * 100) / 100,
+      lowStockCount: overview.lowStockCount,
+      outOfStockCount: overview.outOfStockCount,
       categoryDistribution: productStats?.categoryDistribution || [],
       turnoverRate,
     };

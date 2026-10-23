@@ -128,11 +128,21 @@ export class InventoryController {
 
     await AuditService.log({
       userId: req.user!.userId,
-      action: AuditAction.STATUS_CHANGE,
-      entity: "StockMovement",
-      entityId: result.movement._id.toString(),
+      action: AuditAction.STOCK_UPDATED,
+      entity: "Product",
+      entityId: result.product._id.toString(),
       previousValue: { stock: result.movement.previousStock },
-      newValue: { stock: result.movement.newStock, type, quantity },
+      newValue: {
+        stock: result.movement.newStock,
+        productName: result.product.name,
+        sku: result.product.sku,
+        movementType: type,
+        quantity: Math.abs(result.movement.quantity),
+        reason: result.movement.reason,
+        movementId: result.movement._id.toString(),
+        referenceType: result.movement.referenceType,
+        referenceId: result.movement.referenceId?.toString(),
+      },
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
     });
@@ -187,6 +197,14 @@ export class InventoryController {
   ): Promise<void> {
     const data = await InventoryService.getLowStockProducts();
     ApiResponse.success(res, data, "Low stock products");
+  }
+
+  static async getReplenishmentPlan(
+    _req: AuthRequest,
+    res: Response,
+  ): Promise<void> {
+    const data = await InventoryService.getReplenishmentPlan();
+    ApiResponse.success(res, data, "Inventory replenishment plan");
   }
 
   static async getWarehouseSummary(

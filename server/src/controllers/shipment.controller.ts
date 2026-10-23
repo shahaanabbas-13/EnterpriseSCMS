@@ -71,10 +71,11 @@ export class ShipmentController {
   }
 
   static async updateShipmentStatus(req: AuthRequest, res: Response): Promise<void> {
-    const shipment = await ShipmentService.updateShipmentStatus(
+    const { shipment, previousStatus, orderTransition } = await ShipmentService.updateShipmentStatus(
       str(req.params.id),
       req.body.status,
       req.body.location,
+      req.user!.userId,
       req.body.note
     );
 
@@ -83,10 +84,27 @@ export class ShipmentController {
       action: AuditAction.STATUS_CHANGE,
       entity: 'Shipment',
       entityId: shipment._id.toString(),
+      previousValue: { status: previousStatus },
       newValue: { status: shipment.status, trackingId: shipment.trackingId },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
     });
+
+    if (orderTransition) {
+      await AuditService.log({
+        userId: req.user!.userId,
+        action: AuditAction.STATUS_CHANGE,
+        entity: 'Order',
+        entityId: orderTransition.order._id.toString(),
+        previousValue: { status: orderTransition.previousStatus },
+        newValue: {
+          status: orderTransition.order.status,
+          orderNumber: orderTransition.order.orderNumber,
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+    }
 
     ApiResponse.success(res, shipment, `Shipment status updated to ${shipment.status}`);
   }

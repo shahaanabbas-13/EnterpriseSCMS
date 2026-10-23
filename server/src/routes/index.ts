@@ -7,6 +7,8 @@ import vendorRoutes from './vendor.routes';
 import orderRoutes from './order.routes';
 import shipmentRoutes from './shipment.routes';
 import analyticsRoutes from './analytics.routes';
+import auditRoutes from './audit.routes';
+import userRoutes from './user.routes';
 
 const router = Router();
 
@@ -19,5 +21,7 @@ router.use('/vendors', vendorRoutes);               // Phase 3
 router.use('/orders', orderRoutes);                 // Phase 4
 router.use('/shipments', shipmentRoutes);           // Phase 5
 router.use('/analytics', analyticsRoutes);          // Phase 6
+router.use('/audit-logs', auditRoutes);              // Phase 7
+router.use('/users', userRoutes);                    // Phase 8
 
 export default router;

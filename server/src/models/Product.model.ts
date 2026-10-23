@@ -90,7 +90,6 @@ const productSchema = new Schema<IProductDocument>(
   }
 );
 
-productSchema.index({ sku: 1 });
 productSchema.index({ category: 1 });
 productSchema.index({ warehouseId: 1 });
 productSchema.index({ currentStock: 1, reorderPoint: 1 });

@@ -17,13 +17,12 @@ export class AuthController {
    * Creates a new user account and returns tokens.
    */
   static async register(req: Request, res: Response): Promise<void> {
-    const { email, password, name, role } = req.body;
+    const { email, password, name } = req.body;
 
     const { user, accessToken, refreshToken } = await AuthService.register({
       email,
       password,
       name,
-      role,
     });
 
     // Audit log
@@ -45,6 +44,7 @@ export class AuthController {
           email: user.email,
           name: user.name,
           role: user.role,
+          ...(user.vendorId ? { vendorId: user.vendorId.toString() } : {}),
         },
         accessToken,
         refreshToken,
@@ -84,6 +84,7 @@ export class AuthController {
           email: user.email,
           name: user.name,
           role: user.role,
+          ...(user.vendorId ? { vendorId: user.vendorId.toString() } : {}),
         },
         accessToken,
         refreshToken,
@@ -145,6 +146,7 @@ export class AuthController {
         email: user.email,
         name: user.name,
         role: user.role,
+        vendorId: user.vendorId?.toString(),
         isActive: user.isActive,
         createdAt: user.createdAt,
       },

@@ -105,7 +105,6 @@ const vendorSchema = new Schema<IVendorDocument>(
   }
 );
 
-vendorSchema.index({ code: 1 });
 vendorSchema.index({ status: 1 });
 vendorSchema.index({ categories: 1 });
 vendorSchema.index({ rating: -1 });

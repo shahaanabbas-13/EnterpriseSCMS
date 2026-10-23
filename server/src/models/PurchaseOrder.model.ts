@@ -6,6 +6,7 @@ export interface IPurchaseOrderItem {
   productName: string;
   sku: string;
   quantity: number;
+  receivedQuantity: number;
   unitPrice: number;
   totalPrice: number;
 }
@@ -19,6 +20,12 @@ export interface IPurchaseOrderDocument extends Document {
   status: PurchaseOrderStatus;
   expectedDeliveryDate: Date;
   actualDeliveryDate?: Date;
+  receiptHistory: Array<{
+    receivedBy: mongoose.Types.ObjectId;
+    receivedAt: Date;
+    note?: string;
+    items: Array<{ productId: mongoose.Types.ObjectId; quantity: number }>;
+  }>;
   notes?: string;
   createdBy: mongoose.Types.ObjectId;
   approvedBy?: mongoose.Types.ObjectId;
@@ -40,6 +47,7 @@ const purchaseOrderItemSchema = new Schema<IPurchaseOrderItem>(
       required: true,
       min: [1, 'Quantity must be at least 1'],
     },
+    receivedQuantity: { type: Number, min: 0, default: 0 },
     unitPrice: {
       type: Number,
       required: true,
@@ -97,6 +105,15 @@ const purchaseOrderSchema = new Schema<IPurchaseOrderDocument>(
     actualDeliveryDate: {
       type: Date,
     },
+    receiptHistory: [{
+      receivedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+      receivedAt: { type: Date, required: true, default: Date.now },
+      note: { type: String, trim: true, maxlength: 1000 },
+      items: [{
+        productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
+        quantity: { type: Number, required: true, min: 1 },
+      }],
+    }],
     notes: {
       type: String,
       trim: true,
@@ -118,7 +135,6 @@ const purchaseOrderSchema = new Schema<IPurchaseOrderDocument>(
   }
 );
 
-purchaseOrderSchema.index({ poNumber: 1 });
 purchaseOrderSchema.index({ vendorId: 1, status: 1 });
 purchaseOrderSchema.index({ warehouseId: 1 });
 purchaseOrderSchema.index({ status: 1, createdAt: -1 });

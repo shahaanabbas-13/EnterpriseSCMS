@@ -134,7 +134,6 @@ const orderSchema = new Schema<IOrderDocument>(
   }
 );
 
-orderSchema.index({ orderNumber: 1 });
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ warehouseId: 1, status: 1 });
 orderSchema.index({ 'customer.email': 1 });
