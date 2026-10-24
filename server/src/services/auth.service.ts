@@ -159,6 +159,20 @@ export class AuthService {
     logger.debug("User logged out");
   }
 
+  /** Change an authenticated user's password, revoke existing refresh tokens, and return a fresh session. */
+  static async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ accessToken: string; refreshToken: string }> {
+    const user = await User.findById(userId).select('+password');
+    if (!user || !user.isActive) throw ApiError.unauthorized('User account is unavailable');
+    if (!await user.comparePassword(currentPassword)) throw ApiError.badRequest('Current password is incorrect');
+    if (await user.comparePassword(newPassword)) throw ApiError.badRequest('Choose a new password that is different from your current password');
+    user.password = newPassword;
+    await user.save();
+    await this.revokeAllUserTokens(userId);
+    const tokens = await this.generateTokenPair(user);
+    logger.info(`Password changed for user: ${user.email}`);
+    return tokens;
+  }
+
   /**
    * Revoke all refresh tokens for a user.
    * Used on password change, security breach, admin action.

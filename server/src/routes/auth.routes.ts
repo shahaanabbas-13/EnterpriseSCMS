@@ -7,6 +7,7 @@ import {
   loginSchema,
   refreshSchema,
   logoutSchema,
+  changePasswordSchema,
 } from '../validators/auth.validator';
 
 const router = Router();
@@ -31,6 +32,7 @@ router.post('/refresh', validate(refreshSchema), AuthController.refresh);
 
 // Protected routes (require valid access token)
 router.post('/logout', authenticate, validate(logoutSchema), AuthController.logout);
+router.post('/change-password', authenticate, validate(changePasswordSchema), AuthController.changePassword);
 router.get('/profile', authenticate, AuthController.getProfile);
 
 export default router;

@@ -61,3 +61,10 @@ export const logoutSchema = {
       .min(1, 'Refresh token is required'),
   }),
 };
+
+export const changePasswordSchema = {
+  body: z.object({
+    currentPassword: z.string().min(1, 'Current password is required'),
+    newPassword: z.string().min(8).max(128).regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, 'Password must contain an uppercase letter, a lowercase letter, and a number'),
+  }),
+};

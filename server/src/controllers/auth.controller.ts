@@ -130,6 +130,20 @@ export class AuthController {
     ApiResponse.success(res, null, 'Logged out successfully');
   }
 
+  static async changePassword(req: AuthRequest, res: Response): Promise<void> {
+    const tokens = await AuthService.changePassword(req.user!.userId, req.body.currentPassword, req.body.newPassword);
+    await AuditService.log({
+      userId: req.user!.userId,
+      action: AuditAction.UPDATE,
+      entity: 'User',
+      entityId: req.user!.userId,
+      newValue: { passwordChanged: true },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    ApiResponse.success(res, tokens, 'Password changed. Other refresh sessions have been revoked.');
+  }
+
   /**
    * GET /api/auth/profile
    * Returns the authenticated user's profile.
