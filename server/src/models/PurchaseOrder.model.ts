@@ -20,6 +20,10 @@ export interface IPurchaseOrderDocument extends Document {
   status: PurchaseOrderStatus;
   expectedDeliveryDate: Date;
   actualDeliveryDate?: Date;
+  vendorResponse?: { response: 'ACKNOWLEDGED' | 'REJECTED'; note?: string; proposedDeliveryDate?: Date; respondedAt: Date };
+  dispatchDetails?: { carrier: string; trackingNumber: string; dispatchedAt: Date; note?: string };
+  dispatchHistory: Array<{ carrier: string; trackingNumber: string; dispatchedAt: Date; note?: string; recordedAt: Date; recordedBy: mongoose.Types.ObjectId }>;
+  statusHistory: Array<{ fromStatus?: PurchaseOrderStatus; toStatus: PurchaseOrderStatus; changedBy: mongoose.Types.ObjectId; timestamp: Date; note?: string }>;
   receiptHistory: Array<{
     receivedBy: mongoose.Types.ObjectId;
     receivedAt: Date;
@@ -105,6 +109,33 @@ const purchaseOrderSchema = new Schema<IPurchaseOrderDocument>(
     actualDeliveryDate: {
       type: Date,
     },
+    vendorResponse: {
+      response: { type: String, enum: ['ACKNOWLEDGED', 'REJECTED'] },
+      note: { type: String, trim: true, maxlength: 1000 },
+      proposedDeliveryDate: Date,
+      respondedAt: Date,
+    },
+    dispatchDetails: {
+      carrier: { type: String, trim: true, maxlength: 120 },
+      trackingNumber: { type: String, trim: true, maxlength: 120 },
+      dispatchedAt: Date,
+      note: { type: String, trim: true, maxlength: 1000 },
+    },
+    dispatchHistory: [{
+      carrier: { type: String, required: true, trim: true, maxlength: 120 },
+      trackingNumber: { type: String, required: true, trim: true, maxlength: 120 },
+      dispatchedAt: { type: Date, required: true },
+      note: { type: String, trim: true, maxlength: 1000 },
+      recordedAt: { type: Date, required: true, default: Date.now },
+      recordedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    }],
+    statusHistory: [{
+      fromStatus: { type: String, enum: Object.values(PurchaseOrderStatus) },
+      toStatus: { type: String, enum: Object.values(PurchaseOrderStatus), required: true },
+      changedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+      timestamp: { type: Date, required: true, default: Date.now },
+      note: { type: String, trim: true, maxlength: 1000 },
+    }],
     receiptHistory: [{
       receivedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
       receivedAt: { type: Date, required: true, default: Date.now },

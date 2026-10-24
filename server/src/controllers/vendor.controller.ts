@@ -107,6 +107,12 @@ export class VendorController {
     ApiResponse.success(res, data, 'Vendor performance metrics');
   }
 
+  static async getMyPerformance(req: AuthRequest, res: Response): Promise<void> {
+    const vendorId = await VendorController.getVendorAccountId(req);
+    const data = await VendorService.getVendorPerformance(vendorId);
+    ApiResponse.success(res, data, 'Supplier performance metrics');
+  }
+
   // ─── Purchase Order Endpoints ────────────────────────────────────
 
   static async createPurchaseOrder(req: AuthRequest, res: Response): Promise<void> {
@@ -170,14 +176,6 @@ export class VendorController {
   }
 
   static async updatePurchaseOrderStatus(req: AuthRequest, res: Response): Promise<void> {
-    if (req.user!.role === 'VENDOR') {
-      if (req.body.status !== PurchaseOrderStatus.ACKNOWLEDGED) throw ApiError.forbidden('Vendors can only acknowledge purchase orders sent to them');
-      const vendorId = await VendorController.getVendorAccountId(req);
-      const existingPO = await VendorService.getPurchaseOrderById(str(req.params.id));
-      const vendorRef = existingPO.vendorId as unknown as { _id?: unknown };
-      const ownerId = String(vendorRef?._id ?? existingPO.vendorId);
-      if (ownerId !== vendorId) throw ApiError.notFound('Purchase order not found');
-    }
     const { po, previousStatus } = await VendorService.updatePurchaseOrderStatus(
       str(req.params.id),
       req.body.status,
@@ -196,6 +194,54 @@ export class VendorController {
     });
 
     ApiResponse.success(res, po, `Purchase order status updated to ${po.status}`);
+  }
+
+  static async respondToPurchaseOrder(req: AuthRequest, res: Response): Promise<void> {
+    const vendorId = await VendorController.getVendorAccountId(req);
+    const id = str(req.params.id);
+    const existingPO = await VendorService.getPurchaseOrderById(id);
+    const vendorRef = existingPO.vendorId as unknown as { _id?: unknown };
+    if (String(vendorRef?._id ?? existingPO.vendorId) !== vendorId) throw ApiError.notFound('Purchase order not found');
+    const { po, previousStatus } = await VendorService.respondToPurchaseOrder(id, req.user!.userId, {
+      response: req.body.response,
+      note: req.body.note,
+      proposedDeliveryDate: req.body.proposedDeliveryDate ? new Date(req.body.proposedDeliveryDate) : undefined,
+    });
+    await AuditService.log({
+      userId: req.user!.userId,
+      action: AuditAction.STATUS_CHANGE,
+      entity: 'PurchaseOrder',
+      entityId: po._id.toString(),
+      previousValue: { status: previousStatus },
+      newValue: { status: po.status, vendorResponse: po.vendorResponse, poNumber: po.poNumber },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    ApiResponse.success(res, po, `Purchase order ${req.body.response.toLowerCase()}`);
+  }
+
+  static async recordVendorDispatch(req: AuthRequest, res: Response): Promise<void> {
+    const vendorId = await VendorController.getVendorAccountId(req);
+    const id = str(req.params.id);
+    const existingPO = await VendorService.getPurchaseOrderById(id);
+    const vendorRef = existingPO.vendorId as unknown as { _id?: unknown };
+    if (String(vendorRef?._id ?? existingPO.vendorId) !== vendorId) throw ApiError.notFound('Purchase order not found');
+    const previousDispatch = existingPO.dispatchDetails ?? null;
+    const po = await VendorService.recordVendorDispatch(id, req.user!.userId, {
+      ...req.body,
+      dispatchedAt: new Date(req.body.dispatchedAt),
+    });
+    await AuditService.log({
+      userId: req.user!.userId,
+      action: AuditAction.UPDATE,
+      entity: 'PurchaseOrder',
+      entityId: po._id.toString(),
+      previousValue: { dispatchDetails: previousDispatch },
+      newValue: { dispatchDetails: po.dispatchDetails, poNumber: po.poNumber },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    ApiResponse.success(res, po, 'Dispatch details recorded');
   }
 
   static async correctPurchaseOrderWarehouse(req: AuthRequest, res: Response): Promise<void> {

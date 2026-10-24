@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { UserRole } from '../types';
 
 /**
  * Zod validation schemas for auth endpoints.
@@ -41,6 +42,7 @@ export const loginSchema = {
     password: z
       .string({ required_error: 'Password is required' })
       .min(1, 'Password is required'),
+    role: z.nativeEnum(UserRole).optional(),
   }),
 };
 

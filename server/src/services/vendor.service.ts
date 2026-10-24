@@ -29,6 +29,46 @@ import { logger } from '../utils/logger';
  * This ensures the score is always accurate and auditable.
  */
 export class VendorService {
+  static async respondToPurchaseOrder(
+    poId: string,
+    actorId: string,
+    input: { response: 'ACKNOWLEDGED' | 'REJECTED'; note?: string; proposedDeliveryDate?: Date }
+  ): Promise<{ po: IPurchaseOrderDocument; previousStatus: PurchaseOrderStatus }> {
+    const po = await PurchaseOrder.findById(poId);
+    if (!po) throw ApiError.notFound('Purchase order not found');
+    if (po.status !== PurchaseOrderStatus.SENT) throw ApiError.badRequest(`A supplier response can only be recorded for a SENT purchase order (current status: ${po.status})`);
+    if (input.proposedDeliveryDate && input.proposedDeliveryDate.getTime() < new Date().setHours(0, 0, 0, 0)) {
+      throw ApiError.badRequest('Proposed delivery date cannot be in the past');
+    }
+    const previousStatus = po.status;
+    po.vendorResponse = { ...input, respondedAt: new Date() };
+    if (input.response === 'ACKNOWLEDGED') po.status = PurchaseOrderStatus.ACKNOWLEDGED;
+    else po.status = PurchaseOrderStatus.REJECTED;
+    po.statusHistory.push({ fromStatus: previousStatus, toStatus: po.status, changedBy: new mongoose.Types.ObjectId(actorId), timestamp: new Date(), note: input.note || `Supplier ${input.response.toLowerCase()} the order` } as never);
+    await po.save();
+    logger.info(`PO ${po.poNumber}: vendor response ${input.response}`);
+    return { po, previousStatus };
+  }
+
+  static async recordVendorDispatch(
+    poId: string,
+    actorId: string,
+    input: { carrier: string; trackingNumber: string; dispatchedAt: Date; note?: string }
+  ): Promise<IPurchaseOrderDocument> {
+    const po = await PurchaseOrder.findById(poId);
+    if (!po) throw ApiError.notFound('Purchase order not found');
+    if (![PurchaseOrderStatus.ACKNOWLEDGED, PurchaseOrderStatus.PARTIALLY_RECEIVED].includes(po.status)) {
+      throw ApiError.badRequest(`Dispatch details can only be recorded for acknowledged orders that are not fully received (current status: ${po.status})`);
+    }
+    if (input.dispatchedAt.getTime() > Date.now() + 5 * 60 * 1000) throw ApiError.badRequest('Dispatch date cannot be in the future');
+    if (input.dispatchedAt.getTime() < po.createdAt.getTime()) throw ApiError.badRequest('Dispatch date cannot be earlier than the purchase order date');
+    po.dispatchHistory.push({ ...input, recordedAt: new Date(), recordedBy: new mongoose.Types.ObjectId(actorId) } as never);
+    po.dispatchDetails = input;
+    await po.save();
+    logger.info(`PO ${po.poNumber}: dispatch recorded with ${input.carrier} (${input.trackingNumber})`);
+    return po;
+  }
+
   // ─── Vendor CRUD ──────────────────────────────────────────────
 
   static async createVendor(data: {
@@ -143,7 +183,7 @@ export class VendorService {
 
     const activePOs = await PurchaseOrder.countDocuments({
       vendorId,
-      status: { $nin: [PurchaseOrderStatus.CLOSED, PurchaseOrderStatus.DELIVERED] },
+      status: { $nin: [PurchaseOrderStatus.CLOSED, PurchaseOrderStatus.DELIVERED, PurchaseOrderStatus.REJECTED] },
     });
     if (activePOs > 0) {
       throw ApiError.badRequest(
@@ -222,6 +262,7 @@ export class VendorService {
       expectedDeliveryDate: data.expectedDeliveryDate,
       notes: data.notes,
       createdBy: data.createdBy,
+      statusHistory: [{ toStatus: PurchaseOrderStatus.DRAFT, changedBy: data.createdBy, timestamp: new Date(), note: 'Purchase order created' }],
     });
 
     logger.info(`Purchase order created: ${po.poNumber} for vendor ${vendor.code}`);
@@ -335,6 +376,7 @@ export class VendorService {
         [PurchaseOrderStatus.SENT]: [PurchaseOrderStatus.ACKNOWLEDGED],
         [PurchaseOrderStatus.ACKNOWLEDGED]: [],
         [PurchaseOrderStatus.PARTIALLY_RECEIVED]: [],
+        [PurchaseOrderStatus.REJECTED]: [],
         [PurchaseOrderStatus.DELIVERED]: [PurchaseOrderStatus.CLOSED],
         [PurchaseOrderStatus.CLOSED]: [],
       };
@@ -350,6 +392,7 @@ export class VendorService {
         po.approvedBy = new mongoose.Types.ObjectId(actorId);
       }
       po.status = newStatus;
+      po.statusHistory.push({ fromStatus: previousStatus, toStatus: newStatus, changedBy: new mongoose.Types.ObjectId(actorId), timestamp: new Date() } as never);
       await po.save({ session });
       await session.commitTransaction();
     } catch (error) {
@@ -429,8 +472,10 @@ export class VendorService {
         receivedProducts.push({ product, previousStock, newStock, quantity: inputLine.quantity });
       }
       po.receiptHistory.push({ receivedBy: new mongoose.Types.ObjectId(actorId), receivedAt: new Date(), note: input.note, items: receiptLines } as never);
+      const previousStatusForHistory = po.status;
       const complete = po.items.every((line) => (line.receivedQuantity || 0) >= line.quantity);
       po.status = complete ? PurchaseOrderStatus.DELIVERED : PurchaseOrderStatus.PARTIALLY_RECEIVED;
+      po.statusHistory.push({ fromStatus: previousStatusForHistory, toStatus: po.status, changedBy: new mongoose.Types.ObjectId(actorId), timestamp: new Date(), note: input.note || `${receiptLines.length} line(s) received` } as never);
       if (complete) po.actualDeliveryDate = new Date();
       await po.save({ session });
       await session.commitTransaction();
@@ -462,7 +507,7 @@ export class VendorService {
     totalPOs: number;
     deliveredPOs: number;
     onTimeDeliveryRate: number;
-    avgLeadTimeDays: number;
+    avgLeadTimeDays: number | null;
     totalSpend: number;
     avgOrderValue: number;
     lateDeliveries: number;
@@ -485,7 +530,7 @@ export class VendorService {
           delivered: [
             {
               $match: {
-                status: PurchaseOrderStatus.DELIVERED,
+                status: { $in: [PurchaseOrderStatus.DELIVERED, PurchaseOrderStatus.CLOSED] },
                 actualDeliveryDate: { $exists: true },
               },
             },
@@ -553,7 +598,7 @@ export class VendorService {
       totalPOs: overview.totalPOs,
       deliveredPOs: delivered.deliveredPOs,
       onTimeDeliveryRate,
-      avgLeadTimeDays: Math.round(delivered.avgLeadTimeDays * 10) / 10,
+      avgLeadTimeDays: delivered.deliveredPOs > 0 ? Math.round(delivered.avgLeadTimeDays * 10) / 10 : null,
       totalSpend: overview.totalSpend,
       avgOrderValue: Math.round(closedStats.avgOrderValue * 100) / 100,
       lateDeliveries: delivered.lateCount,

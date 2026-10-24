@@ -90,3 +90,22 @@ export const receivePurchaseOrderSchema = {
     note: z.string().trim().max(1000).optional(),
   }),
 };
+
+export const vendorPOResponseSchema = {
+  body: z.object({
+    response: z.enum(['ACKNOWLEDGED', 'REJECTED']),
+    note: z.string().trim().max(1000).optional(),
+    proposedDeliveryDate: z.string().refine(value => !Number.isNaN(Date.parse(value)), { message: 'Invalid delivery date' }).optional(),
+  }).superRefine((value, context) => {
+    if (value.response === 'REJECTED' && !value.note?.trim()) context.addIssue({ code: z.ZodIssueCode.custom, path: ['note'], message: 'A reason is required when rejecting a purchase order' });
+  }),
+};
+
+export const vendorDispatchSchema = {
+  body: z.object({
+    carrier: z.string().trim().min(1).max(120),
+    trackingNumber: z.string().trim().min(1).max(120),
+    dispatchedAt: z.string().refine(value => !Number.isNaN(Date.parse(value)), { message: 'Invalid dispatch date' }),
+    note: z.string().trim().max(1000).optional(),
+  }),
+};

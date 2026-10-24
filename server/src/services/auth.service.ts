@@ -57,6 +57,7 @@ export class AuthService {
   static async login(
     email: string,
     password: string,
+    expectedRole?: UserRole,
   ): Promise<{
     user: IUserDocument;
     accessToken: string;
@@ -76,6 +77,10 @@ export class AuthService {
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       throw ApiError.unauthorized("Invalid email or password");
+    }
+
+    if (expectedRole && user.role !== expectedRole) {
+      throw ApiError.forbidden(`This account is registered as ${user.role.replaceAll('_', ' ')}. Select that role to continue.`);
     }
 
     // Generate token pair

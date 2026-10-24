@@ -58,11 +58,12 @@ export class AuthController {
    * Authenticates user and returns tokens.
    */
   static async login(req: Request, res: Response): Promise<void> {
-    const { email, password } = req.body;
+    const { email, password, role } = req.body;
 
     const { user, accessToken, refreshToken } = await AuthService.login(
       email,
-      password
+      password,
+      role
     );
 
     // Audit log

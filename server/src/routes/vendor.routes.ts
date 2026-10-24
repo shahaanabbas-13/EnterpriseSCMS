@@ -10,6 +10,8 @@ import {
   updatePOStatusSchema,
   correctPOWarehouseSchema,
   receivePurchaseOrderSchema,
+  vendorPOResponseSchema,
+  vendorDispatchSchema,
 } from '../validators/vendor.validator';
 
 const router = Router();
@@ -28,6 +30,12 @@ router.get(
   '/',
   requireRole(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.OPERATIONS_MANAGER),
   VendorController.getVendors
+);
+
+router.get(
+  '/me/performance',
+  requireRole(UserRole.VENDOR),
+  VendorController.getMyPerformance
 );
 
 // Register static paths before /:id so "purchase-orders" is not parsed as a vendor ID.
@@ -50,6 +58,20 @@ router.get(
   VendorController.getPurchaseOrderById
 );
 
+router.post(
+  '/purchase-orders/:id/vendor-response',
+  requireRole(UserRole.VENDOR),
+  validate(vendorPOResponseSchema),
+  VendorController.respondToPurchaseOrder
+);
+
+router.post(
+  '/purchase-orders/:id/dispatch',
+  requireRole(UserRole.VENDOR),
+  validate(vendorDispatchSchema),
+  VendorController.recordVendorDispatch
+);
+
 router.patch(
   '/purchase-orders/:id/warehouse',
   requireRole(UserRole.ADMIN),
@@ -59,7 +81,7 @@ router.patch(
 
 router.patch(
   '/purchase-orders/:id/status',
-  requireRole(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.VENDOR),
+  requireRole(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER),
   validate(updatePOStatusSchema),
   VendorController.updatePurchaseOrderStatus
 );
