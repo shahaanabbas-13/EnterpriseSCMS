@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { Vendor, IVendorDocument } from '../models/Vendor.model';
 import { Product } from '../models/Product.model';
+import { Warehouse } from '../models/Warehouse.model';
 import { StockMovement } from '../models/StockMovement.model';
 import { InventoryService } from './inventory.service';
 import {
@@ -71,7 +72,7 @@ export class VendorService {
       search?: string;
     },
     pagination: PaginationQuery = {}
-  ): Promise<PaginatedResult<IVendorDocument>> {
+  ): Promise<PaginatedResult<IVendorDocument & { rating: number | null }>> {
     const {
       page = PAGINATION.DEFAULT_PAGE,
       limit = PAGINATION.DEFAULT_LIMIT,
@@ -96,8 +97,14 @@ export class VendorService {
       Vendor.countDocuments(query),
     ]);
 
+    const completedDeliveryScores = data.length ? await PurchaseOrder.aggregate([
+      { $match: { vendorId: { $in: data.map((vendor) => vendor._id) }, status: { $in: [PurchaseOrderStatus.DELIVERED, PurchaseOrderStatus.CLOSED] }, actualDeliveryDate: { $exists: true } } },
+      { $group: { _id: '$vendorId', deliveredCount: { $sum: 1 }, onTimeCount: { $sum: { $cond: [{ $lte: ['$actualDeliveryDate', '$expectedDeliveryDate'] }, 1, 0] } } } },
+    ]) : [];
+    const scoreByVendor = new Map(completedDeliveryScores.map((score) => [score._id.toString(), score.deliveredCount > 0 ? Math.round((score.onTimeCount / score.deliveredCount) * 50) / 10 : null]));
+
     return {
-      data: data as IVendorDocument[],
+      data: data.map((vendor) => ({ ...vendor, rating: scoreByVendor.get(vendor._id.toString()) ?? null })) as unknown as Array<IVendorDocument & { rating: number | null }>,
       pagination: { total, page, limit, pages: Math.ceil(total / limit) },
     };
   }
@@ -171,12 +178,34 @@ export class VendorService {
       throw ApiError.badRequest('Cannot create PO for inactive/blacklisted vendor');
     }
 
+    if (!mongoose.isValidObjectId(data.warehouseId)) throw ApiError.badRequest('A valid destination warehouse is required');
+    const warehouse = await Warehouse.findOne({ _id: data.warehouseId, isActive: true }).select('_id');
+    if (!warehouse) throw ApiError.badRequest('Select an active destination warehouse');
+
+    const productIds = [...new Set(data.items.map(item => item.productId))];
+    if (productIds.some(id => !mongoose.isValidObjectId(id))) throw ApiError.badRequest('Purchase order contains an invalid product');
+    const products = await Product.find({ _id: { $in: productIds }, isActive: true }).select('name sku costPrice warehouseId');
+    const productsById = new Map(products.map(product => [product._id.toString(), product]));
+    for (const item of data.items) {
+      const product = productsById.get(item.productId);
+      if (!product) throw ApiError.badRequest(`Product ${item.productId} is unavailable`);
+      if (product.warehouseId.toString() !== data.warehouseId) {
+        throw ApiError.badRequest(`Product ${product.sku} is assigned to a different warehouse. Choose the product's warehouse or assign the product first.`);
+      }
+    }
+
     // Calculate line totals and grand total
-    const items = data.items.map((item) => ({
-      ...item,
-      productId: new mongoose.Types.ObjectId(item.productId),
-      totalPrice: item.quantity * item.unitPrice,
-    }));
+    const items = data.items.map((item) => {
+      const product = productsById.get(item.productId)!;
+      return {
+        ...item,
+        productName: product.name,
+        sku: product.sku,
+        unitPrice: product.costPrice,
+        productId: new mongoose.Types.ObjectId(item.productId),
+        totalPrice: item.quantity * product.costPrice,
+      };
+    });
     const totalCost = items.reduce((sum, item) => sum + item.totalPrice, 0);
 
     // Generate PO number: PO-YYYYMMDD-XXXX
@@ -197,6 +226,34 @@ export class VendorService {
 
     logger.info(`Purchase order created: ${po.poNumber} for vendor ${vendor.code}`);
     return po;
+  }
+
+  static async correctPurchaseOrderWarehouse(poId: string, warehouseId: string): Promise<{ po: IPurchaseOrderDocument; previousWarehouseId: string }> {
+    if (!mongoose.isValidObjectId(warehouseId)) throw ApiError.badRequest('Select a valid destination warehouse');
+    const po = await PurchaseOrder.findById(poId);
+    if (!po) throw ApiError.notFound('Purchase order not found');
+    if (po.receiptHistory.length || po.items.some(item => (item.receivedQuantity || 0) > 0)) {
+      throw ApiError.badRequest('Destination cannot be changed after any items have been received');
+    }
+    if ([PurchaseOrderStatus.DELIVERED, PurchaseOrderStatus.CLOSED].includes(po.status)) {
+      throw ApiError.badRequest(`Destination cannot be changed while purchase order is ${po.status}`);
+    }
+    const warehouse = await Warehouse.findOne({ _id: warehouseId, isActive: true }).select('_id');
+    if (!warehouse) throw ApiError.badRequest('Select an active destination warehouse');
+    const products = await Product.find({ _id: { $in: po.items.map(item => item.productId) }, isActive: true }).select('sku warehouseId');
+    const productsById = new Map(products.map(product => [product._id.toString(), product]));
+    for (const item of po.items) {
+      const product = productsById.get(item.productId.toString());
+      if (!product) throw ApiError.badRequest(`Product ${item.sku} is unavailable`);
+      if (product.warehouseId.toString() !== warehouseId) {
+        throw ApiError.badRequest(`Product ${item.sku} is assigned to another warehouse. The PO destination must match every product line.`);
+      }
+    }
+    const previousWarehouseId = po.warehouseId.toString();
+    po.warehouseId = new mongoose.Types.ObjectId(warehouseId);
+    await po.save();
+    logger.info(`PO ${po.poNumber}: destination corrected ${previousWarehouseId} → ${warehouseId}`);
+    return { po, previousWarehouseId };
   }
 
   static async getPurchaseOrders(

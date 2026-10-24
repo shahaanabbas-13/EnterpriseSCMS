@@ -30,24 +30,16 @@ const processLowStockAlert = async (job: Job<LowStockAlertData>): Promise<void> 
   // Push real-time alert to dashboard
   try {
     const io = getIO();
-    io.to(`warehouse:${warehouseId}`).emit(SocketEvents.LOW_STOCK_ALERT, {
+    const alert = {
       productId: job.data.productId,
       sku,
       name,
       currentStock,
       reorderPoint,
       timestamp: new Date().toISOString(),
-    });
-
-    io.to('role:ADMIN').emit(SocketEvents.LOW_STOCK_ALERT, {
-      productId: job.data.productId,
-      sku,
-      name,
-      currentStock,
-      reorderPoint,
       warehouseId,
-      timestamp: new Date().toISOString(),
-    });
+    };
+    io.to(['role:ADMIN', 'role:WAREHOUSE_MANAGER']).emit(SocketEvents.LOW_STOCK_ALERT, alert);
   } catch {
     logger.debug('Socket.io not available for low stock alert broadcast');
   }

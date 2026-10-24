@@ -198,6 +198,23 @@ export class VendorController {
     ApiResponse.success(res, po, `Purchase order status updated to ${po.status}`);
   }
 
+  static async correctPurchaseOrderWarehouse(req: AuthRequest, res: Response): Promise<void> {
+    const { po, previousWarehouseId } = await VendorService.correctPurchaseOrderWarehouse(
+      str(req.params.id), str(req.body.warehouseId)
+    );
+    await AuditService.log({
+      userId: req.user!.userId,
+      action: AuditAction.UPDATE,
+      entity: 'PurchaseOrder',
+      entityId: po._id.toString(),
+      previousValue: { warehouseId: previousWarehouseId },
+      newValue: { warehouseId: po.warehouseId.toString(), poNumber: po.poNumber },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    ApiResponse.success(res, po, 'Purchase order destination corrected');
+  }
+
   static async receivePurchaseOrder(req: AuthRequest, res: Response): Promise<void> {
     const { po, previousStatus } = await VendorService.receivePurchaseOrder(
       str(req.params.id), req.user!.userId, req.body

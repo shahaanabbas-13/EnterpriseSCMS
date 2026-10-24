@@ -7,6 +7,7 @@ import { ApiResponse } from '../utils/ApiResponse';
 import { AuthService } from '../services/auth.service';
 import { Vendor } from '../models/Vendor.model';
 import mongoose from 'mongoose';
+import { disconnectUserSockets } from '../config/socket';
 
 export class UserController {
   static async list(_req: AuthRequest, res: Response): Promise<void> {
@@ -69,6 +70,7 @@ export class UserController {
     const after = { role: target.role, vendorId: target.vendorId?.toString(), isActive: target.isActive };
     if (before.role !== after.role || before.isActive !== after.isActive || before.vendorId !== after.vendorId) {
       await AuthService.revokeAllUserTokens(target._id.toString());
+      disconnectUserSockets(target._id.toString());
     }
     await AuditService.log({
       userId: req.user!.userId,

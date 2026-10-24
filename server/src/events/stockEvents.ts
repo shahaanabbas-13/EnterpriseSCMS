@@ -18,7 +18,7 @@ export const registerStockEventListeners = (): void => {
   appEvents.onEvent(AppEvents.STOCK_CHANGED, (data) => {
     try {
       const io = getIO();
-      io.to(`warehouse:${data.warehouseId}`).emit(SocketEvents.STOCK_UPDATE, data);
+      io.to(['role:ADMIN', 'role:WAREHOUSE_MANAGER']).emit(SocketEvents.STOCK_UPDATE, data);
     } catch {
       logger.debug('Socket.io not available for stock update broadcast');
     }

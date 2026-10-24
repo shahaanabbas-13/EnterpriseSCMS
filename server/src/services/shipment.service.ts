@@ -247,7 +247,7 @@ export class ShipmentService {
 
     try {
       const io = getIO();
-      io.emit(SocketEvents.SHIPMENT_UPDATE, {
+      io.to(['role:ADMIN', 'role:OPERATIONS_MANAGER', 'role:WAREHOUSE_MANAGER']).emit(SocketEvents.SHIPMENT_UPDATE, {
         shipmentId: shipment._id,
         trackingId: shipment.trackingId,
         orderId: shipment.orderId,
@@ -312,7 +312,7 @@ export class ShipmentService {
     // Broadcast checkpoint update
     try {
       const io = getIO();
-      io.emit(SocketEvents.SHIPMENT_UPDATE, {
+      io.to(['role:ADMIN', 'role:OPERATIONS_MANAGER', 'role:WAREHOUSE_MANAGER']).emit(SocketEvents.SHIPMENT_UPDATE, {
         shipmentId: shipment._id,
         trackingId: shipment.trackingId,
         type: 'checkpoint',

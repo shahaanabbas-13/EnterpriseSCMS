@@ -8,6 +8,7 @@ import {
   updateVendorSchema,
   createPurchaseOrderSchema,
   updatePOStatusSchema,
+  correctPOWarehouseSchema,
   receivePurchaseOrderSchema,
 } from '../validators/vendor.validator';
 
@@ -47,6 +48,13 @@ router.get(
   '/purchase-orders/:id',
   requireRole(UserRole.ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.VENDOR, UserRole.OPERATIONS_MANAGER),
   VendorController.getPurchaseOrderById
+);
+
+router.patch(
+  '/purchase-orders/:id/warehouse',
+  requireRole(UserRole.ADMIN),
+  validate(correctPOWarehouseSchema),
+  VendorController.correctPurchaseOrderWarehouse
 );
 
 router.patch(

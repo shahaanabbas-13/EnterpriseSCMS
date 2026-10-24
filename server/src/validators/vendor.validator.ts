@@ -75,6 +75,12 @@ export const updatePOStatusSchema = {
   }),
 };
 
+export const correctPOWarehouseSchema = {
+  body: z.object({
+    warehouseId: z.string().regex(/^[a-f\d]{24}$/i, 'Invalid warehouse id'),
+  }),
+};
+
 export const receivePurchaseOrderSchema = {
   body: z.object({
     items: z.array(z.object({
