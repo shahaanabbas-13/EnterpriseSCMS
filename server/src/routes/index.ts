@@ -9,6 +9,7 @@ import shipmentRoutes from './shipment.routes';
 import analyticsRoutes from './analytics.routes';
 import auditRoutes from './audit.routes';
 import userRoutes from './user.routes';
+import demoRoutes from './demo.routes';
 
 const router = Router();
 
@@ -23,5 +24,6 @@ router.use('/shipments', shipmentRoutes);           // Phase 5
 router.use('/analytics', analyticsRoutes);          // Phase 6
 router.use('/audit-logs', auditRoutes);              // Phase 7
 router.use('/users', userRoutes);                    // Phase 8
+router.use('/demo', demoRoutes);                      // Public, read-only recruiter snapshot
 
 export default router;
