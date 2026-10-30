@@ -6,6 +6,7 @@ import config from './config';
 import routes from './routes';
 import { errorHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
+import { connectDB } from './config/db';
 
 /**
  * Express application factory.
@@ -38,6 +39,9 @@ app.use(morgan(morganFormat, {
 }));
 
 // ─── API Routes ─────────────────────────────────────────────
+app.use('/api', (_req, _res, next) => {
+  void connectDB().then(() => next()).catch(next);
+});
 app.use('/api', routes);
 
 // ─── Root Route ─────────────────────────────────────────────

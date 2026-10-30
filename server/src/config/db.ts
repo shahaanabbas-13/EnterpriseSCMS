@@ -2,50 +2,36 @@ import mongoose from "mongoose";
 import config from "./index";
 import { logger } from "../utils/logger";
 
-const MAX_RETRIES = 5;
-const RETRY_DELAY_MS = 5000;
+let connectionPromise: Promise<void> | null = null;
 
 export const connectDB = async (): Promise<void> => {
-  let retries = 0;
+  if (mongoose.connection.readyState === 1) return;
+  if (connectionPromise) return connectionPromise;
 
+  connectionPromise = connectWithRetry();
+  try {
+    await connectionPromise;
+  } finally {
+    connectionPromise = null;
+  }
+};
+
+const connectWithRetry = async (): Promise<void> => {
   if (!config.mongo.uri) {
     throw new Error("MONGODB_URI is missing from environment configuration");
   }
 
-  while (retries < MAX_RETRIES) {
-    try {
-      await mongoose.connect(config.mongo.uri, {
-        // Mongoose 9 defaults are good — no need for deprecated options
-      });
+  await mongoose.connect(config.mongo.uri, { serverSelectionTimeoutMS: 10000 });
+  logger.info(`MongoDB connected: ${mongoose.connection.host}`);
 
-      logger.info(`MongoDB connected: ${mongoose.connection.host}`);
+  // Connection event listeners
+  mongoose.connection.on("error", (err) => {
+    logger.error("MongoDB connection error:", err);
+  });
 
-      // Connection event listeners
-      mongoose.connection.on("error", (err) => {
-        logger.error("MongoDB connection error:", err);
-      });
-
-      mongoose.connection.on("disconnected", () => {
-        logger.warn("MongoDB disconnected. Attempting reconnection...");
-      });
-
-      return; // Success — exit retry loop
-    } catch (error) {
-      retries++;
-      logger.error(
-        `MongoDB connection attempt ${retries}/${MAX_RETRIES} failed:`,
-        error,
-      );
-
-      if (retries >= MAX_RETRIES) {
-        logger.error("Max MongoDB connection retries reached. Exiting.");
-        process.exit(1);
-      }
-
-      logger.info(`Retrying in ${RETRY_DELAY_MS / 1000}s...`);
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-    }
-  }
+  mongoose.connection.on("disconnected", () => {
+    logger.warn("MongoDB disconnected. Attempting reconnection...");
+  });
 };
 
 export const disconnectDB = async (): Promise<void> => {

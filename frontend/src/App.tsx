@@ -4,7 +4,7 @@ import { Activity, AlertTriangle, ArrowDownToLine, ArrowUpRight, Boxes, ChevronD
 import { io as connectSocket } from 'socket.io-client'
 import './App.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
+const API = import.meta.env.VITE_API_URL || '/api'
 const SOCKET_URL = API.replace(/\/api\/?$/, '')
 type User = { id: string; name: string; email: string; role: string; vendorId?: string }
 type LoginRole = 'ADMIN' | 'WAREHOUSE_MANAGER' | 'OPERATIONS_MANAGER' | 'VENDOR'
@@ -420,7 +420,7 @@ function App() {
         {user?.role === 'ADMIN' && <button className={`nav-link ${activePage === 'users' ? 'selected' : ''}`} onClick={() => setActivePage('users')}><Users size={16} />User access{activePage === 'users' && <i />}</button>}
         </>}
       </nav>
-      <div className="sidebar-bottom"><div className="help-box"><CircleHelp size={16} /><b>Need a hand?</b><p>Check your API and system status.</p><a href="http://localhost:5000/api/health" target="_blank" rel="noreferrer">View system health <ArrowUpRight size={12} /></a></div>
+      <div className="sidebar-bottom"><div className="help-box"><CircleHelp size={16} /><b>Need a hand?</b><p>Check your API and system status.</p><a href={`${API}/health`} target="_blank" rel="noreferrer">View system health <ArrowUpRight size={12} /></a></div>
         <button className="user-row" onClick={() => setConfirmLogout(true)} aria-label="Log out"><span className="user-avatar">{(user?.name || user?.email || 'A').slice(0, 1).toUpperCase()}</span><span><b>{user?.name || 'Administrator'}</b><small>{user?.role || 'ADMIN'}</small></span><LogOut size={15} /></button>
       </div>
     </aside>
